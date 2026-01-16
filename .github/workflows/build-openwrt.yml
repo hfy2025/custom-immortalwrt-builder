@@ -1,4 +1,4 @@
-name: 极速构建 ImmortalWrt (Docker ImageBuilder)
+name: 极速构建 OpenWrt (Docker ImageBuilder)
 
 on:
   workflow_dispatch:
@@ -8,18 +8,18 @@ on:
         required: false
         default: 'false'
       version:
-        description: 'ImmortalWrt 版本'
+        description: '版本标签'
         required: false
-        default: '23.05'
-        type: choice
-        options:
-          - '21.02'
-          - '22.03'
-          - '23.05'
+        default: '25.12'
+        type: string
+      profile:
+        description: '设备 Profile'
+        required: false
+        default: 'generic'
+        type: string
 
 env:
-  # 使用 ImmortalWrt 官方 ImageBuilder
-  IMAGEBUILDER_REPO: immortalwrt/imagebuilder
+  DOCKER_IMAGE: openwrt/imagebuilder:x86-64-openwrt-25.12
   CONFIG_FILE: x86_64.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
@@ -30,9 +30,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      # 根据选择的版本动态设置镜像
-      image: immortalwrt/imagebuilder:x86-64-immortalwrt-${{ github.event.inputs.version || '23.05' }}
-      options: --user root
+      image: ${{ env.DOCKER_IMAGE }}
+      options: --user root --network host
     env:
       KERNEL_PARTSIZE: 16
       ROOTFS_PARTSIZE: 1024
@@ -40,63 +39,82 @@ jobs:
     steps:
     - name: 检查本仓库
       uses: actions/checkout@v4
+      with:
+        path: workspace
 
     - name: 初始化环境
       run: |
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        echo "VERSION=${{ github.event.inputs.version || '23.05' }}" >> $GITHUB_ENV
-        mkdir -p files
+        echo "VERSION=${{ github.event.inputs.version || '25.12' }}" >> $GITHUB_ENV
+        echo "PROFILE=${{ github.event.inputs.profile || 'generic' }}" >> $GITHUB_ENV
         
-        # 创建基础文件结构（可选）
-        if [ ! -f "files/etc/banner" ]; then
-          mkdir -p files/etc
-          echo "   ___                 _    ____  _   _ ____  _____" > files/etc/banner
-          echo "  |_ _|_ __ ___  _ __ | | _| __ )| | | |  _ \|_   _|" >> files/etc/banner
-          echo "   | || '_ \` _ \| '_ \| |/ /  _ \| | | | |_) | | |" >> files/etc/banner
-          echo "   | || | | | | | |_) |   <| |_) | |_| |  _ <  | |" >> files/etc/banner
-          echo "  |___|_| |_| |_| .__/|_|\_\____/ \___/|_| \_\ |_|" >> files/etc/banner
-          echo "                |_|" >> files/etc/banner
-          echo "" >> files/etc/banner
-          echo " -----------------------------------------------------" >> files/etc/banner
-          echo " %D %V, %C %A" >> files/etc/banner
-          echo " -----------------------------------------------------" >> files/etc/banner
+        # 创建工作目录
+        mkdir -p /home/build
+        mkdir -p workspace/files
+        chmod -R 777 /home/build workspace
+
+    - name: 显示容器信息
+      run: |
+        echo "===== 容器信息 ====="
+        echo "镜像: ${{ env.DOCKER_IMAGE }}"
+        echo "版本: ${{ env.VERSION }}"
+        echo "Profile: ${{ env.PROFILE }}"
+        echo "工作目录: $(pwd)"
+        echo "===== 目录结构 ====="
+        find / -name "Makefile" -type f 2>/dev/null | head -10
+        echo "===== ImageBuilder 位置 ====="
+        if [ -d "/builder" ]; then
+          echo "找到 /builder 目录"
+          ls -la /builder/
+        fi
+        if [ -d "/home/build" ]; then
+          echo "找到 /home/build 目录"
+          find /home/build -maxdepth 3 -type f -name "Makefile" 2>/dev/null | head -5
         fi
 
     - name: 执行自定义脚本 (DIY)
+      working-directory: /__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace
       run: |
+        echo "当前目录: $(pwd)"
+        ls -la
+        
         if [ -f "$DIY_P1_SH" ]; then
+          echo "执行 $DIY_P1_SH"
           chmod +x "$DIY_P1_SH"
           ./"$DIY_P1_SH"
+        else
+          echo "未找到 $DIY_P1_SH"
         fi
+        
         if [ -f "$DIY_P2_SH" ]; then
+          echo "执行 $DIY_P2_SH"
           chmod +x "$DIY_P2_SH"
           ./"$DIY_P2_SH"
+        else
+          echo "未找到 $DIY_P2_SH"
         fi
 
-    - name: 极速生成固件
-      id: compile
+    - name: 查找并进入 ImageBuilder 目录
+      id: locate_ib
       run: |
-        # 1. 定位 ImageBuilder 目录
         IB_DIR=""
-        possible_paths=(
-          "/builder"
-          "/home/build"
-          "/imagebuilder"
-          "/opt/imagebuilder"
-        )
         
-        for path in "${possible_paths[@]}"; do
-          if [ -f "$path/Makefile" ]; then
+        # 优先检查已知路径
+        for path in "/builder" "/home/build" "/imagebuilder" "/opt/imagebuilder"; do
+          if [ -d "$path" ] && [ -f "$path/Makefile" ]; then
             IB_DIR="$path"
+            echo "找到 ImageBuilder 目录: $IB_DIR"
             break
           fi
         done
         
+        # 如果没找到，搜索 Makefile
         if [ -z "$IB_DIR" ]; then
-          # 尝试查找 Makefile
-          found_makefile=$(find / -name "Makefile" -type f 2>/dev/null | grep -E "(openwrt|immortalwrt|lede)" | head -1)
+          echo "搜索 Makefile..."
+          found_makefile=$(find / -name "Makefile" -type f 2>/dev/null | grep -v ".git" | grep -v "node_modules" | head -1)
           if [ -n "$found_makefile" ]; then
             IB_DIR=$(dirname "$found_makefile")
+            echo "通过 Makefile 找到目录: $IB_DIR"
           fi
         fi
         
@@ -105,48 +123,114 @@ jobs:
           exit 1
         fi
         
-        echo "构建目录: $IB_DIR"
+        echo "ImageBuilder 目录: $IB_DIR"
         cd "$IB_DIR"
+        echo "当前目录: $(pwd)"
+        echo "::set-output name=ib_dir::$IB_DIR"
+
+    - name: 准备配置文件
+      id: prepare_config
+      working-directory: /__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace
+      run: |
+        CONFIG_CONTENT=""
         
-        # 2. 配置文件处理
-        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
-          echo "使用自定义配置文件"
-          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+        if [ -f "$CONFIG_FILE" ]; then
+          echo "使用自定义配置文件: $CONFIG_FILE"
+          CONFIG_CONTENT=$(cat "$CONFIG_FILE")
+          echo "$CONFIG_CONTENT" > ${{ steps.locate_ib.outputs.ib_dir }}/.config
         else
-          echo "使用默认 x86_64 配置"
-          cat > .config << EOF
+          echo "生成默认配置文件"
+          cat > ${{ steps.locate_ib.outputs.ib_dir }}/.config << EOF
 CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
-CONFIG_TARGET_x86_64_DEVICE_generic=y
+CONFIG_TARGET_x86_64_DEVICE_${{ env.PROFILE }}=y
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_VMDK_IMAGES=y
+CONFIG_GRUB_IMAGES=y
 EOF
+          
           # 根据 SSH 选项添加配置
           if [ "${{ github.event.inputs.ssh }}" == "true" ]; then
-            echo "CONFIG_PACKAGE_openssh-server=y" >> .config
-            echo "CONFIG_PACKAGE_dropbear=y" >> .config
+            echo "CONFIG_PACKAGE_dropbear=y" >> ${{ steps.locate_ib.outputs.ib_dir }}/.config
+            echo "CONFIG_DROPBEAR_ED25519=y" >> ${{ steps.locate_ib.outputs.ib_dir }}/.config
           fi
         fi
+
+    - name: 解析包列表
+      id: parse_packages
+      working-directory: ${{ steps.locate_ib.outputs.ib_dir }}
+      run: |
+        echo "解析配置文件..."
         
-        # 3. 解析包列表（更高效的方式）
-        PACKAGES=$(awk -F= '/^CONFIG_PACKAGE_/ && $2=="y" {gsub(/^CONFIG_PACKAGE_/, "", $1); print $1}' .config | tr '\n' ' ')
-        echo "包数量: $(echo $PACKAGES | wc -w)"
+        # 提取所有 CONFIG_PACKAGE_*=y 的包
+        PACKAGES=$(grep '^CONFIG_PACKAGE_' .config | grep '=y' | sed 's/CONFIG_PACKAGE_//;s/=y//' | tr '\n' ' ')
         
-        # 4. 执行构建
+        # 计算包数量
+        PACKAGE_COUNT=$(echo $PACKAGES | wc -w)
+        
+        echo "包数量: $PACKAGE_COUNT"
+        echo "前20个包:"
+        echo $PACKAGES | tr ' ' '\n' | head -20
+        
+        # 存储到环境变量
+        echo "PACKAGES=$PACKAGES" >> $GITHUB_ENV
+        echo "PACKAGE_COUNT=$PACKAGE_COUNT" >> $GITHUB_ENV
+
+    - name: 极速生成固件
+      id: compile
+      working-directory: ${{ steps.locate_ib.outputs.ib_dir }}
+      run: |
         echo "开始构建..."
+        echo "Profile: ${{ env.PROFILE }}"
+        echo "Kernel Partsize: $KERNEL_PARTSIZE MB"
+        echo "Rootfs Partsize: $ROOTFS_PARTSIZE MB"
+        
+        # 构建命令
         make image \
-          PROFILE="generic" \
+          PROFILE="${{ env.PROFILE }}" \
           PACKAGES="$PACKAGES" \
-          FILES="$GITHUB_WORKSPACE/files" \
+          FILES="/__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace/files" \
+          BIN_DIR="/__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace/bin" \
           KERNEL_PARTSIZE=$KERNEL_PARTSIZE \
           ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE \
-          BIN_DIR="$GITHUB_WORKSPACE/bin"
+          DISABLED_SERVICES=""
         
-        # 5. 整理产物
-        mkdir -p "$GITHUB_WORKSPACE/bin/targets/x86/64/"
-        find bin/targets -type f \( -name "*.img.gz" -o -name "*.iso" -o -name "*.vmdk" -o -name "*.qcow2" -o -name "*.sha256sums" \) \
-          -exec cp {} "$GITHUB_WORKSPACE/bin/targets/x86/64/" \;
+        # 检查构建结果
+        if [ $? -eq 0 ]; then
+          echo "构建成功!"
+        else
+          echo "::error::构建失败"
+          exit 1
+        fi
         
         echo "DEVICE_NAME=x86_64" >> $GITHUB_ENV
-        echo "BUILD_DATE=${{ env.FILE_DATE }}" >> $GITHUB_ENV
+
+    - name: 整理构建产物
+      working-directory: /__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace
+      run: |
+        echo "整理产物..."
+        mkdir -p artifacts
+        
+        # 复制所有产物
+        if [ -d "bin/targets/x86/64" ]; then
+          cp -r bin/targets/x86/64/* artifacts/
+        elif [ -d "bin/targets" ]; then
+          find bin/targets -type f \( -name "*.img.gz" -o -name "*.img" -o -name "*.iso" -o -name "*.vmdk" -o -name "*.qcow2" -o -name "*.sha256sums" -o -name "*.manifest" \) -exec cp {} artifacts/ \;
+        fi
+        
+        # 显示产物信息
+        echo "构建产物:"
+        ls -la artifacts/ || true
+        
+        # 计算 SHA256
+        cd artifacts
+        for file in *; do
+          if [ -f "$file" ] && [[ ! "$file" == *.sha256sums ]] && [[ ! "$file" == *.manifest ]]; then
+            sha256sum "$file" > "$file.sha256"
+          fi
+        done
+        
+        echo "产物准备完成"
 
     - name: 发布到 Release
       uses: softprops/action-gh-release@v1
@@ -154,39 +238,66 @@ EOF
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ImmortalWrt-x86_64_${{ env.VERSION }}_${{ env.FILE_DATE }}
-        name: ImmortalWrt ${{ env.VERSION }} x86_64 [${{ env.FILE_DATE }}]
+        tag_name: OpenWrt-25.12-x86_64-${{ env.PROFILE }}-${{ env.FILE_DATE }}
+        name: OpenWrt 25.12 x86_64 [${{ env.PROFILE }}] [${{ env.FILE_DATE }}]
         body: |
-          # ImmortalWrt 固件
+          # OpenWrt 25.12 固件
           
           **版本信息:**
-          - 版本: ${{ env.VERSION }}
+          - OpenWrt 版本: 25.12 (自定义/开发版)
           - 架构: x86_64
-          - 构建时间: $(date -d @${{ env.FILE_DATE::8 }} +"%Y-%m-%d %H:%M")
+          - 设备 Profile: ${{ env.PROFILE }}
+          - 构建时间: ${{ env.FILE_DATE::8 }} 
           
-          **设备信息:**
-          - 管理地址: 192.168.1.1
-          - 用户名: root
-          - 密码: （无默认密码，首次登录需设置）
-          
-          **分区信息:**
+          **构建配置:**
           - 内核分区: ${KERNEL_PARTSIZE}MB
-          - 根分区: ${ROOTFS_PARTSIZE}MB
+          - 根文件系统分区: ${ROOTFS_PARTSIZE}MB
+          - 包含软件包: ${{ env.PACKAGE_COUNT }} 个
+          - SSH 访问: ${{ github.event.inputs.ssh == 'true' && '已启用' || '未启用' }}
           
-          **包含文件:**
-          - 磁盘镜像 (.img.gz)
-          - SHA256 校验文件
+          **默认网络:**
+          - 管理地址: 192.168.6.1
+          - 用户名: root
+          - 密码: （无默认密码）
+          
+          **使用说明:**
+          1. 将 `.img.gz` 文件解压后写入 USB 或硬盘
+          2. 首次启动需要设置 root 密码
+          3. 通过浏览器访问 https://192.168.1.1 进行配置
+          
+          **文件说明:**
+          - `.img.gz`: 压缩磁盘镜像
+          - `.img`: 原始磁盘镜像
+          - `.vmdk`: VMware 虚拟磁盘
+          - `.sha256`: SHA256 校验文件
+          - `.manifest`: 包清单
           
           **注意事项:**
-          1. 建议使用 Etcher 或 Rufus 写入
-          2. 首次启动可能需要几分钟初始化
-          3. SSH ${{ github.event.inputs.ssh == 'true' && '已启用' || '未启用' }}
-        files: bin/targets/x86/64/*
+          - 此版本为 25.12，非官方稳定版
+          - 建议在虚拟机或测试环境中使用
+          - 如需帮助，请提供详细的错误信息
+        files: workspace/artifacts/*
         draft: false
-        prerelease: false
+        prerelease: true
 
-    - name: 清理工作空间
+    - name: 上传构建日志
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-logs
+        path: |
+          ${{ steps.locate_ib.outputs.ib_dir }}/logs/
+          workspace/artifacts/*.manifest
+        retention-days: 7
+
+    - name: 显示构建摘要
       if: always()
       run: |
-        # 清理临时文件（可选）
-        rm -rf tmp/ build_dir/ staging_dir/ logs/ || true
+        echo "===== 构建摘要 ====="
+        echo "状态: ${{ job.status }}"
+        echo "版本: ${{ env.VERSION }}"
+        echo "Profile: ${{ env.PROFILE }}"
+        echo "构建时间: ${{ env.FILE_DATE }}"
+        echo "包数量: ${{ env.PACKAGE_COUNT }}"
+        echo "SSH: ${{ github.event.inputs.ssh }}"
+        echo "产物目录: workspace/artifacts/"
