@@ -10,7 +10,7 @@ on:
 
 env:
   DOCKER_IMAGE: openwrt/imagebuilder:x86-64-openwrt-25.12
-  CONFIG_FILE: seed.config
+  CONFIG_FILE: x86_64.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_RELEASE: true
@@ -94,8 +94,8 @@ jobs:
       uses: softprops/action-gh-release@v1
       if: env.UPLOAD_RELEASE == 'true'
       with:
-        tag_name: ImmortalWrt_x86_64_${{ env.FILE_DATE }}
-        name: ImmortalWrt 极速发布 [${{ env.FILE_DATE }}]
+        tag_name: ImmortalWrt-x86_x86_64_${{ env.FILE_DATE }}
+        name: ImmortalWrt-x86 极速发布 [${{ env.FILE_DATE }}]
         body: |
           编译完成！
           构建模式: Docker ImageBuilder (极速)
