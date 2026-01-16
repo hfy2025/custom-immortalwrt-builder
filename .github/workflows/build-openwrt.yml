@@ -48,7 +48,6 @@ jobs:
         echo "VERSION=${{ github.event.inputs.version || '25.12' }}" >> $GITHUB_ENV
         echo "PROFILE=${{ github.event.inputs.profile || 'generic' }}" >> $GITHUB_ENV
         
-        # 创建工作目录
         mkdir -p /home/build
         mkdir -p workspace/files
         chmod -R 777 /home/build workspace
@@ -59,25 +58,10 @@ jobs:
         echo "镜像: ${{ env.DOCKER_IMAGE }}"
         echo "版本: ${{ env.VERSION }}"
         echo "Profile: ${{ env.PROFILE }}"
-        echo "工作目录: $(pwd)"
-        echo "===== 目录结构 ====="
-        find / -name "Makefile" -type f 2>/dev/null | head -10
-        echo "===== ImageBuilder 位置 ====="
-        if [ -d "/builder" ]; then
-          echo "找到 /builder 目录"
-          ls -la /builder/
-        fi
-        if [ -d "/home/build" ]; then
-          echo "找到 /home/build 目录"
-          find /home/build -maxdepth 3 -type f -name "Makefile" 2>/dev/null | head -5
-        fi
 
     - name: 执行自定义脚本 (DIY)
       working-directory: /__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace
       run: |
-        echo "当前目录: $(pwd)"
-        ls -la
-        
         if [ -f "$DIY_P1_SH" ]; then
           echo "执行 $DIY_P1_SH"
           chmod +x "$DIY_P1_SH"
@@ -162,17 +146,10 @@ EOF
       run: |
         echo "解析配置文件..."
         
-        # 提取所有 CONFIG_PACKAGE_*=y 的包
         PACKAGES=$(grep '^CONFIG_PACKAGE_' .config | grep '=y' | sed 's/CONFIG_PACKAGE_//;s/=y//' | tr '\n' ' ')
-        
-        # 计算包数量
         PACKAGE_COUNT=$(echo $PACKAGES | wc -w)
         
         echo "包数量: $PACKAGE_COUNT"
-        echo "前20个包:"
-        echo $PACKAGES | tr ' ' '\n' | head -20
-        
-        # 存储到环境变量
         echo "PACKAGES=$PACKAGES" >> $GITHUB_ENV
         echo "PACKAGE_COUNT=$PACKAGE_COUNT" >> $GITHUB_ENV
 
@@ -185,17 +162,14 @@ EOF
         echo "Kernel Partsize: $KERNEL_PARTSIZE MB"
         echo "Rootfs Partsize: $ROOTFS_PARTSIZE MB"
         
-        # 构建命令
         make image \
           PROFILE="${{ env.PROFILE }}" \
           PACKAGES="$PACKAGES" \
           FILES="/__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace/files" \
           BIN_DIR="/__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace/bin" \
           KERNEL_PARTSIZE=$KERNEL_PARTSIZE \
-          ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE \
-          DISABLED_SERVICES=""
+          ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE
         
-        # 检查构建结果
         if [ $? -eq 0 ]; then
           echo "构建成功!"
         else
@@ -211,18 +185,12 @@ EOF
         echo "整理产物..."
         mkdir -p artifacts
         
-        # 复制所有产物
         if [ -d "bin/targets/x86/64" ]; then
           cp -r bin/targets/x86/64/* artifacts/
         elif [ -d "bin/targets" ]; then
           find bin/targets -type f \( -name "*.img.gz" -o -name "*.img" -o -name "*.iso" -o -name "*.vmdk" -o -name "*.qcow2" -o -name "*.sha256sums" -o -name "*.manifest" \) -exec cp {} artifacts/ \;
         fi
         
-        # 显示产物信息
-        echo "构建产物:"
-        ls -la artifacts/ || true
-        
-        # 计算 SHA256
         cd artifacts
         for file in *; do
           if [ -f "$file" ] && [[ ! "$file" == *.sha256sums ]] && [[ ! "$file" == *.manifest ]]; then
@@ -263,7 +231,7 @@ EOF
           **使用说明:**
           1. 将 `.img.gz` 文件解压后写入 USB 或硬盘
           2. 首次启动需要设置 root 密码
-          3. 通过浏览器访问 https://192.168.1.1 进行配置
+          3. 通过浏览器访问 https://192.168.6.1 进行配置
           
           **文件说明:**
           - `.img.gz`: 压缩磁盘镜像
@@ -300,4 +268,4 @@ EOF
         echo "构建时间: ${{ env.FILE_DATE }}"
         echo "包数量: ${{ env.PACKAGE_COUNT }}"
         echo "SSH: ${{ github.event.inputs.ssh }}"
-        echo "产物目录: workspace/artifacts/"
+        echo "管理地址: 192.168.6.1"
