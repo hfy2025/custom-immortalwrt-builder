@@ -83,7 +83,6 @@ jobs:
       run: |
         IB_DIR=""
         
-        # 优先检查已知路径
         for path in "/builder" "/home/build" "/imagebuilder" "/opt/imagebuilder"; do
           if [ -d "$path" ] && [ -f "$path/Makefile" ]; then
             IB_DIR="$path"
@@ -92,7 +91,6 @@ jobs:
           fi
         done
         
-        # 如果没找到，搜索 Makefile
         if [ -z "$IB_DIR" ]; then
           echo "搜索 Makefile..."
           found_makefile=$(find / -name "Makefile" -type f 2>/dev/null | grep -v ".git" | grep -v "node_modules" | head -1)
@@ -110,21 +108,18 @@ jobs:
         echo "ImageBuilder 目录: $IB_DIR"
         cd "$IB_DIR"
         echo "当前目录: $(pwd)"
-        echo "::set-output name=ib_dir::$IB_DIR"
+        echo "ib_dir=$IB_DIR" >> $GITHUB_ENV
 
     - name: 准备配置文件
       id: prepare_config
       working-directory: /__w/$(basename ${{ github.repository }})/$(basename ${{ github.repository }})/workspace
       run: |
-        CONFIG_CONTENT=""
-        
         if [ -f "$CONFIG_FILE" ]; then
           echo "使用自定义配置文件: $CONFIG_FILE"
-          CONFIG_CONTENT=$(cat "$CONFIG_FILE")
-          echo "$CONFIG_CONTENT" > ${{ steps.locate_ib.outputs.ib_dir }}/.config
+          cp "$CONFIG_FILE" "$IB_DIR/.config"
         else
           echo "生成默认配置文件"
-          cat > ${{ steps.locate_ib.outputs.ib_dir }}/.config << EOF
+          cat > "$IB_DIR/.config" << EOF
 CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
 CONFIG_TARGET_x86_64_DEVICE_${{ env.PROFILE }}=y
@@ -133,16 +128,15 @@ CONFIG_VMDK_IMAGES=y
 CONFIG_GRUB_IMAGES=y
 EOF
           
-          # 根据 SSH 选项添加配置
           if [ "${{ github.event.inputs.ssh }}" == "true" ]; then
-            echo "CONFIG_PACKAGE_dropbear=y" >> ${{ steps.locate_ib.outputs.ib_dir }}/.config
-            echo "CONFIG_DROPBEAR_ED25519=y" >> ${{ steps.locate_ib.outputs.ib_dir }}/.config
+            echo "CONFIG_PACKAGE_dropbear=y" >> "$IB_DIR/.config"
+            echo "CONFIG_DROPBEAR_ED25519=y" >> "$IB_DIR/.config"
           fi
         fi
 
     - name: 解析包列表
       id: parse_packages
-      working-directory: ${{ steps.locate_ib.outputs.ib_dir }}
+      working-directory: ${{ env.ib_dir }}
       run: |
         echo "解析配置文件..."
         
@@ -155,7 +149,7 @@ EOF
 
     - name: 极速生成固件
       id: compile
-      working-directory: ${{ steps.locate_ib.outputs.ib_dir }}
+      working-directory: ${{ env.ib_dir }}
       run: |
         echo "开始构建..."
         echo "Profile: ${{ env.PROFILE }}"
@@ -229,16 +223,16 @@ EOF
           - 密码: （无默认密码）
           
           **使用说明:**
-          1. 将 `.img.gz` 文件解压后写入 USB 或硬盘
+          1. 将 .img.gz 文件解压后写入 USB 或硬盘
           2. 首次启动需要设置 root 密码
           3. 通过浏览器访问 https://192.168.6.1 进行配置
           
           **文件说明:**
-          - `.img.gz`: 压缩磁盘镜像
-          - `.img`: 原始磁盘镜像
-          - `.vmdk`: VMware 虚拟磁盘
-          - `.sha256`: SHA256 校验文件
-          - `.manifest`: 包清单
+          - .img.gz: 压缩磁盘镜像
+          - .img: 原始磁盘镜像
+          - .vmdk: VMware 虚拟磁盘
+          - .sha256: SHA256 校验文件
+          - .manifest: 包清单
           
           **注意事项:**
           - 此版本为 25.12，非官方稳定版
@@ -254,7 +248,7 @@ EOF
       with:
         name: build-logs
         path: |
-          ${{ steps.locate_ib.outputs.ib_dir }}/logs/
+          ${{ env.ib_dir }}/logs/
           workspace/artifacts/*.manifest
         retention-days: 7
 
