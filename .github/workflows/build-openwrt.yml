@@ -7,9 +7,19 @@ on:
         description: '是否启用 SSH'
         required: false
         default: 'false'
+      version:
+        description: 'ImmortalWrt 版本'
+        required: false
+        default: '23.05'
+        type: choice
+        options:
+          - '21.02'
+          - '22.03'
+          - '23.05'
 
 env:
-  DOCKER_IMAGE: openwrt/imagebuilder:x86-64-openwrt-25.12
+  # 使用 ImmortalWrt 官方 ImageBuilder
+  IMAGEBUILDER_REPO: immortalwrt/imagebuilder
   CONFIG_FILE: x86_64.config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
@@ -20,7 +30,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: openwrt/imagebuilder:x86-64-openwrt-25.12
+      # 根据选择的版本动态设置镜像
+      image: immortalwrt/imagebuilder:x86-64-immortalwrt-${{ github.event.inputs.version || '23.05' }}
       options: --user root
     env:
       KERNEL_PARTSIZE: 16
@@ -28,77 +39,154 @@ jobs:
 
     steps:
     - name: 检查本仓库
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 初始化环境
-      shell: bash
       run: |
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "VERSION=${{ github.event.inputs.version || '23.05' }}" >> $GITHUB_ENV
         mkdir -p files
+        
+        # 创建基础文件结构（可选）
+        if [ ! -f "files/etc/banner" ]; then
+          mkdir -p files/etc
+          echo "   ___                 _    ____  _   _ ____  _____" > files/etc/banner
+          echo "  |_ _|_ __ ___  _ __ | | _| __ )| | | |  _ \|_   _|" >> files/etc/banner
+          echo "   | || '_ \` _ \| '_ \| |/ /  _ \| | | | |_) | | |" >> files/etc/banner
+          echo "   | || | | | | | |_) |   <| |_) | |_| |  _ <  | |" >> files/etc/banner
+          echo "  |___|_| |_| |_| .__/|_|\_\____/ \___/|_| \_\ |_|" >> files/etc/banner
+          echo "                |_|" >> files/etc/banner
+          echo "" >> files/etc/banner
+          echo " -----------------------------------------------------" >> files/etc/banner
+          echo " %D %V, %C %A" >> files/etc/banner
+          echo " -----------------------------------------------------" >> files/etc/banner
+        fi
 
     - name: 执行自定义脚本 (DIY)
-      shell: bash
       run: |
-        chmod +x $DIY_P1_SH $DIY_P2_SH
-        ./$DIY_P1_SH
-        ./$DIY_P2_SH
+        if [ -f "$DIY_P1_SH" ]; then
+          chmod +x "$DIY_P1_SH"
+          ./"$DIY_P1_SH"
+        fi
+        if [ -f "$DIY_P2_SH" ]; then
+          chmod +x "$DIY_P2_SH"
+          ./"$DIY_P2_SH"
+        fi
 
     - name: 极速生成固件
       id: compile
-      shell: bash
       run: |
-        # 1. 自动定位 ImageBuilder 目录 (优化探测逻辑，杜绝语法错误)
+        # 1. 定位 ImageBuilder 目录
         IB_DIR=""
-        if [ -f "/builder/Makefile" ]; then
-            IB_DIR="/builder"
-        else
-            # 搜索当前容器内所有的 Makefile 并取第一个所在的目录
-            MAPFILE=($(find /home/build -name "Makefile" 2>/dev/null))
-            if [ ${#MAPFILE[@]} -gt 0 ]; then
-                IB_DIR=$(dirname "${MAPFILE[0]}")
-            fi
-        fi
-
+        possible_paths=(
+          "/builder"
+          "/home/build"
+          "/imagebuilder"
+          "/opt/imagebuilder"
+        )
+        
+        for path in "${possible_paths[@]}"; do
+          if [ -f "$path/Makefile" ]; then
+            IB_DIR="$path"
+            break
+          fi
+        done
+        
         if [ -z "$IB_DIR" ]; then
-            echo "::error::未能在容器中找到构建所需的 Makefile"
-            exit 1
-        fi
-
-        echo "定位到构建目录: $IB_DIR"
-        cd "$IB_DIR"
-
-        # 2. 准备配置文件
-        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
-            cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
-        else
-            echo "CONFIG_TARGET_x86=y" > .config
-            echo "CONFIG_TARGET_x86_64=y" >> .config
-        fi
-
-        # 3. 解析包列表 (单行处理，增强稳定性)
-        PACKAGES=$(grep '^CONFIG_PACKAGE_' .config | grep '=y' | sed 's/CONFIG_PACKAGE_//;s/=y//' | xargs echo)
-        echo "待集成软件包: $PACKAGES"
-
-        # 4. 执行构建 (合并为单行，杜绝反斜杠带来的空格风险)
-        make image PROFILE="generic" PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files" KERNEL_PARTSIZE=$KERNEL_PARTSIZE ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE
-
-        # 5. 整理产物
-        mkdir -p $GITHUB_WORKSPACE/bin/targets/x86/64/
-        if [ -d "bin/targets" ]; then
-            find bin/targets/ -type f ( -name "*.img.gz" -o -name "*.iso" -o -name "*.sha256sums" ) -exec cp {} $GITHUB_WORKSPACE/bin/targets/x86/64/ ;
+          # 尝试查找 Makefile
+          found_makefile=$(find / -name "Makefile" -type f 2>/dev/null | grep -E "(openwrt|immortalwrt|lede)" | head -1)
+          if [ -n "$found_makefile" ]; then
+            IB_DIR=$(dirname "$found_makefile")
+          fi
         fi
         
+        if [ -z "$IB_DIR" ]; then
+          echo "::error::未找到 ImageBuilder 目录"
+          exit 1
+        fi
+        
+        echo "构建目录: $IB_DIR"
+        cd "$IB_DIR"
+        
+        # 2. 配置文件处理
+        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+          echo "使用自定义配置文件"
+          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+        else
+          echo "使用默认 x86_64 配置"
+          cat > .config << EOF
+CONFIG_TARGET_x86=y
+CONFIG_TARGET_x86_64=y
+CONFIG_TARGET_x86_64_DEVICE_generic=y
+EOF
+          # 根据 SSH 选项添加配置
+          if [ "${{ github.event.inputs.ssh }}" == "true" ]; then
+            echo "CONFIG_PACKAGE_openssh-server=y" >> .config
+            echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          fi
+        fi
+        
+        # 3. 解析包列表（更高效的方式）
+        PACKAGES=$(awk -F= '/^CONFIG_PACKAGE_/ && $2=="y" {gsub(/^CONFIG_PACKAGE_/, "", $1); print $1}' .config | tr '\n' ' ')
+        echo "包数量: $(echo $PACKAGES | wc -w)"
+        
+        # 4. 执行构建
+        echo "开始构建..."
+        make image \
+          PROFILE="generic" \
+          PACKAGES="$PACKAGES" \
+          FILES="$GITHUB_WORKSPACE/files" \
+          KERNEL_PARTSIZE=$KERNEL_PARTSIZE \
+          ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE \
+          BIN_DIR="$GITHUB_WORKSPACE/bin"
+        
+        # 5. 整理产物
+        mkdir -p "$GITHUB_WORKSPACE/bin/targets/x86/64/"
+        find bin/targets -type f \( -name "*.img.gz" -o -name "*.iso" -o -name "*.vmdk" -o -name "*.qcow2" -o -name "*.sha256sums" \) \
+          -exec cp {} "$GITHUB_WORKSPACE/bin/targets/x86/64/" \;
+        
         echo "DEVICE_NAME=x86_64" >> $GITHUB_ENV
+        echo "BUILD_DATE=${{ env.FILE_DATE }}" >> $GITHUB_ENV
 
     - name: 发布到 Release
       uses: softprops/action-gh-release@v1
       if: env.UPLOAD_RELEASE == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ImmortalWrt-x86_x86_64_${{ env.FILE_DATE }}
-        name: ImmortalWrt-x86 极速发布 [${{ env.FILE_DATE }}]
+        tag_name: ImmortalWrt-x86_64_${{ env.VERSION }}_${{ env.FILE_DATE }}
+        name: ImmortalWrt ${{ env.VERSION }} x86_64 [${{ env.FILE_DATE }}]
         body: |
-          编译完成！
-          构建模式: Docker ImageBuilder (极速)
-          管理地址: 192.168.6.1
-          磁盘分区: 16M / 1024M
+          # ImmortalWrt 固件
+          
+          **版本信息:**
+          - 版本: ${{ env.VERSION }}
+          - 架构: x86_64
+          - 构建时间: $(date -d @${{ env.FILE_DATE::8 }} +"%Y-%m-%d %H:%M")
+          
+          **设备信息:**
+          - 管理地址: 192.168.1.1
+          - 用户名: root
+          - 密码: （无默认密码，首次登录需设置）
+          
+          **分区信息:**
+          - 内核分区: ${KERNEL_PARTSIZE}MB
+          - 根分区: ${ROOTFS_PARTSIZE}MB
+          
+          **包含文件:**
+          - 磁盘镜像 (.img.gz)
+          - SHA256 校验文件
+          
+          **注意事项:**
+          1. 建议使用 Etcher 或 Rufus 写入
+          2. 首次启动可能需要几分钟初始化
+          3. SSH ${{ github.event.inputs.ssh == 'true' && '已启用' || '未启用' }}
         files: bin/targets/x86/64/*
+        draft: false
+        prerelease: false
+
+    - name: 清理工作空间
+      if: always()
+      run: |
+        # 清理临时文件（可选）
+        rm -rf tmp/ build_dir/ staging_dir/ logs/ || true
