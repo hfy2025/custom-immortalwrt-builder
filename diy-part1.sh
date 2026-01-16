@@ -4,18 +4,9 @@
 
 echo "========== DIY Part 1 Start =========="
 
-# 首先备份原始的 feeds.conf.default
-if [ -f feeds.conf.default ]; then
-    mv feeds.conf.default feeds.conf.default.backup
-fi
-
-# 创建新的 feeds.conf.default
-cat > feeds.conf.default << 'EOF'
-src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05
-src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05
-src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
-src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
-EOF
+#!/bin/bash
+# x86 特有：添加额外的软件包源
+sed -i '$a src-git smpackage https://github.com/kenzok8/openwrt-packages' feeds.conf.default
 
 # 添加第三方软件源
 echo "添加第三方软件源..."
