@@ -104,19 +104,34 @@ EOF
         mkdir -p openwrt/configs
         
         # 复制配置文件和脚本
-        cp -r configs/* openwrt/configs/
-        cp -r scripts/* openwrt/
-        cp diy-part1.sh openwrt/
-        cp diy-part2.sh openwrt/
+        if [ -d "configs" ]; then
+          cp -r configs/* openwrt/configs/
+        fi
+        
+        if [ -d "scripts" ]; then
+          cp -r scripts/* openwrt/
+        fi
+        
+        if [ -f "diy-part1.sh" ]; then
+          cp diy-part1.sh openwrt/
+        fi
+        
+        if [ -f "diy-part2.sh" ]; then
+          cp diy-part2.sh openwrt/
+        fi
         
         # 设置脚本执行权限
-        chmod +x openwrt/*.sh
-        chmod +x openwrt/scripts/*.sh
+        chmod +x openwrt/*.sh 2>/dev/null || true
+        chmod +x openwrt/scripts/*.sh 2>/dev/null || true
     
     - name: Run DIY Part1
       run: |
         cd openwrt
-        ./diy-part1.sh
+        if [ -f "diy-part1.sh" ]; then
+          ./diy-part1.sh
+        else
+          echo "diy-part1.sh 不存在，跳过此步骤"
+        fi
     
     - name: Update Feeds
       run: |
@@ -129,16 +144,20 @@ EOF
         cd openwrt
         
         # 首先应用基础配置
-        if [ -f configs/base.config ]; then
-          cat configs/base.config > .config
+        if [ -f "configs/custom.config" ]; then
+          cat configs/custom.config > .config
+          echo "已加载基础配置"
         else
-          echo "错误: 找不到 configs/base.config 文件"
-          ls -la configs/
-          exit 1
+          # 如果没有配置文件，创建一个基本的配置
+          echo "# 基础配置" > .config
+          echo "CONFIG_TARGET_x86=y" >> .config
+          echo "CONFIG_TARGET_x86_64=y" >> .config
+          echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+          echo "使用默认基础配置"
         fi
         
         # 设置固件大小
-        FIRMWARE_SIZE=${{ github.event.inputs.firmware_size }}
+        FIRMWARE_SIZE="${{ inputs.firmware_size }}"
         case $FIRMWARE_SIZE in
           "1") ROOTFS_SIZE=1024 ;;
           "1.5") ROOTFS_SIZE=1536 ;;
@@ -151,54 +170,60 @@ EOF
         echo "CONFIG_TARGET_KERNEL_PARTSIZE=64" >> .config
         
         # 设置内核版本
-        KERNEL_VERSION="${{ github.event.inputs.kernel_version }}"
+        KERNEL_VERSION="${{ inputs.kernel_version }}"
         if [ "$KERNEL_VERSION" != "6.6" ]; then
           echo "CONFIG_KERNEL_TESTING_VERSION=$KERNEL_VERSION" >> .config
         fi
         
         # 添加 Docker 配置
-        if [ "${{ github.event.inputs.install_docker }}" = "true" ]; then
-          if [ -f configs/docker.config ]; then
-            cat configs/docker.config >> .config
-          else
-            echo "警告: 找不到 docker.config，使用内置配置"
-            echo "# Docker 配置" >> .config
-            echo "CONFIG_PACKAGE_docker=y" >> .config
-            echo "CONFIG_PACKAGE_dockerd=y" >> .config
-            echo "CONFIG_PACKAGE_docker-compose=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
-          fi
+        if [ "${{ inputs.install_docker }}" = "true" ]; then
+          echo "# Docker 配置" >> .config
+          echo "CONFIG_PACKAGE_docker=y" >> .config
+          echo "CONFIG_PACKAGE_dockerd=y" >> .config
+          echo "CONFIG_PACKAGE_docker-compose=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-dockerman-zh-cn=y" >> .config
+          echo "已添加 Docker 配置"
         fi
         
         # 添加自定义包
-        CUSTOM_PACKAGES="${{ github.event.inputs.custom_packages }}"
+        CUSTOM_PACKAGES="${{ inputs.custom_packages }}"
         if [ -n "$CUSTOM_PACKAGES" ]; then
           for pkg in $CUSTOM_PACKAGES; do
             # 清理包名
             clean_pkg=$(echo $pkg | tr -cd '[:alnum:]-_')
             echo "CONFIG_PACKAGE_${clean_pkg}=y" >> .config
           done
+          echo "已添加自定义包: $CUSTOM_PACKAGES"
         fi
         
         # 运行自定义脚本
-        chmod +x customize.sh
-        ./customize.sh \
-          --docker "${{ github.event.inputs.install_docker }}" \
-          --store "${{ github.event.inputs.install_app_store }}" \
-          --ip "${{ github.event.inputs.management_ip }}" \
-          --luci-version "${{ github.event.inputs.luci_version }}"
+        if [ -f "customize.sh" ]; then
+          chmod +x customize.sh
+          ./customize.sh \
+            --docker "${{ inputs.install_docker }}" \
+            --store "${{ inputs.install_app_store }}" \
+            --ip "${{ inputs.management_ip }}" \
+            --luci-version "${{ inputs.luci_version }}"
+        else
+          echo "customize.sh 不存在，跳过自定义配置"
+        fi
     
     - name: Run DIY Part2
       run: |
         cd openwrt
-        chmod +x diy-part2.sh
-        # 保存环境变量供 DIY Part2 使用
-        echo "LUCI_VERSION=${{ github.event.inputs.luci_version }}" >> env.sh
-        echo "KERNEL_VERSION=${{ github.event.inputs.kernel_version }}" >> env.sh
-        echo "INSTALL_DOCKER=${{ github.event.inputs.install_docker }}" >> env.sh
-        echo "FIRMWARE_SIZE=${{ github.event.inputs.firmware_size }}" >> env.sh
-        source env.sh
-        ./diy-part2.sh
+        if [ -f "diy-part2.sh" ]; then
+          chmod +x diy-part2.sh
+          # 保存环境变量供 DIY Part2 使用
+          echo "LUCI_VERSION=${{ inputs.luci_version }}" > env.sh
+          echo "KERNEL_VERSION=${{ inputs.kernel_version }}" >> env.sh
+          echo "INSTALL_DOCKER=${{ inputs.install_docker }}" >> env.sh
+          echo "FIRMWARE_SIZE=${{ inputs.firmware_size }}" >> env.sh
+          source env.sh
+          ./diy-part2.sh
+        else
+          echo "diy-part2.sh 不存在，跳过此步骤"
+        fi
     
     - name: Download Package Dependencies
       run: |
