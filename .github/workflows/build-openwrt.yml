@@ -44,22 +44,42 @@ jobs:
     - name: 极速生成固件
       id: compile
       run: |
-        # 进入 ImageBuilder 根目录 (通常是 /builder)
-        cd /builder
+        # 1. 自动定位 ImageBuilder 目录 (优先查找 /builder 或 /home/build 下的目录)
+        if [ -d "/builder" ]; then
+          IB_DIR="/builder"
+        else
+          IB_DIR=$(find /home/build -maxdepth 2 -name "openwrt-imagebuilder*" -type d | head -n 1)
+        fi
         
-        # 将配置文件拷贝到编译目录
-        [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ] && cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+        if [ -z "$IB_DIR" ]; then
+          echo "错误: 未找到 ImageBuilder 目录!"
+          exit 1
+        fi
         
-        # 解析 .config 中的包列表
-        PACKAGES=$(grep '^CONFIG_PACKAGE_' .config | grep '=y' | sed 's/CONFIG_PACKAGE_//;s/=y//' | tr '\n' ' ')
+        echo "使用 ImageBuilder 目录: $IB_DIR"
+        cd "$IB_DIR"
         
-        # 执行 ImageBuilder 核心命令
-        # 显式传递分区大小环境变量，FILES 指向工作区的 files 目录
-        make image PACKAGES="$PACKAGES" FILES="$GITHUB_WORKSPACE/files"            KERNEL_PARTSIZE=$KERNEL_PARTSIZE            ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE
+        # 2. 准备配置文件
+        # 如果工作区有配置文件则使用，否则创建一个基础配置
+        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+          cp "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+        else
+          echo "CONFIG_TARGET_x86=y" > .config
+          echo "CONFIG_TARGET_x86_64=y" >> .config
+        fi
         
-        # 将生成的固件拷贝回工作区以便后续发布
+        # 3. 解析包列表
+        # 过滤掉注释并提取软件包名
+        PACKAGES=$(grep '^CONFIG_PACKAGE_' .config | grep '=y' | sed 's/CONFIG_PACKAGE_//;s/=y//' | tr '
+' ' ')
+        
+        # 4. 执行构建
+        # 注入分区大小，FILES 目录设为工作区下的 files
+        make image           PACKAGES="$PACKAGES"           FILES="$GITHUB_WORKSPACE/files"           KERNEL_PARTSIZE=$KERNEL_PARTSIZE           ROOTFS_PARTSIZE=$ROOTFS_PARTSIZE
+        
+        # 5. 整理产物
         mkdir -p $GITHUB_WORKSPACE/bin/targets/x86/64/
-        cp -r bin/targets/x86/64/* $GITHUB_WORKSPACE/bin/targets/x86/64/
+        find bin/targets/x86/64/ -type f ( -name "*.img.gz" -o -name "*.iso" -o -name "*.sha256sums" ) -exec cp {} $GITHUB_WORKSPACE/bin/targets/x86/64/ ;
         
         echo "DEVICE_NAME=x86_64" >> $GITHUB_ENV
 
@@ -74,6 +94,5 @@ jobs:
           构建模式: Docker ImageBuilder (极速)
           镜像版本: openwrt/imagebuilder:x86-64-openwrt-25.12
           管理地址: 192.168.6.1
-          分区设置: 内核 ${{ env.KERNEL_PARTSIZE }}MB / 系统 ${{ env.ROOTFS_PARTSIZE }}MB
-          包含插件: AdGuardHome, Nikki, TurboAcc, Lucky 等
+          分区大小: 内核 ${{ env.KERNEL_PARTSIZE }}MB / 系统 ${{ env.ROOTFS_PARTSIZE }}MB
         files: bin/targets/*/*/*
