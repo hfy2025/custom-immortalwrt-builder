@@ -1,5 +1,3 @@
-# 自定义脚本
-
 #!/bin/bash
 
 # 解析参数
@@ -51,12 +49,14 @@ ETH_COUNT=\$(ls -1 /sys/class/net/ | grep -E '^eth[0-9]+$' | wc -l)
 
 if [ "\$ETH_COUNT" -gt 1 ]; then
     # 多网口设备，设置固定IP
+    echo "多网口设备，设置固定IP: $MANAGEMENT_IP"
     uci set network.lan.ipaddr='$MANAGEMENT_IP'
     uci set network.lan.proto='static'
     uci set network.lan.netmask='255.255.255.0'
     uci commit network
 else
     # 单网口设备，使用DHCP
+    echo "单网口设备，使用DHCP自动获取IP"
     uci set network.lan.proto='dhcp'
     uci commit network
 fi
@@ -66,7 +66,11 @@ EOF
 
 chmod +x files/etc/uci-defaults/99-set-network
 
-# 根据Luci版本调整
+# 根据Luci版本调整 feeds.conf.default
+if [ -f feeds.conf.default.backup ]; then
+    cp feeds.conf.default.backup feeds.conf.default
+fi
+
 case $LUCI_VERSION in
     "22.03")
         echo "使用 Luci 22.03 分支"
@@ -84,10 +88,20 @@ esac
 # 添加应用商店
 if [ "$INSTALL_STORE" = "true" ]; then
     echo "添加应用商店支持"
-    cat >> .config << EOF
-CONFIG_PACKAGE_luci-app-store=y
-CONFIG_PACKAGE_luci-lib-xterm=y
-EOF
+    if [ ! -d "package/thirdparty/luci-app-store" ]; then
+        git clone --depth=1 https://github.com/linkease/istore.git package/thirdparty/istore
+        # 创建符号链接
+        if [ ! -L "package/luci-app-store" ] && [ ! -d "package/luci-app-store" ]; then
+            ln -s ../thirdparty/istore/luci/luci-app-store package/
+        fi
+        if [ ! -L "package/luci-lib-xterm" ] && [ ! -d "package/luci-lib-xterm" ]; then
+            ln -s ../thirdparty/istore/luci/luci-lib-xterm package/
+        fi
+    fi
+    
+    # 在 .config 中添加应用商店
+    echo "CONFIG_PACKAGE_luci-app-store=y" >> .config
+    echo "CONFIG_PACKAGE_luci-lib-xterm=y" >> .config
 fi
 
 echo "自定义配置完成！"
