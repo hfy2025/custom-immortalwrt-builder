@@ -1,0 +1,184 @@
+# GitHub Actions 工作流
+
+name: Build Custom ImmortalWrt x86-64 with Docker
+
+on:
+  workflow_dispatch:
+    inputs:
+      firmware_size:
+        description: '固件大小 (GB)，默认1G，推荐1-2G'
+        required: false
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '1.5'
+          - '2'
+          - '4'
+      
+      install_docker:
+        description: '安装 Docker'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      
+      install_app_store:
+        description: '安装应用商店'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      
+      luci_version:
+        description: 'Luci 版本'
+        required: false
+        default: '24.10.5'
+        type: choice
+        options:
+          - '24.10.5'
+          - '22.03'
+          - 'master'
+      
+      kernel_version:
+        description: '内核版本'
+        required: false
+        default: '6.6'
+        type: choice
+        options:
+          - '6.6'
+          - '6.1'
+          - '5.15'
+          - '5.10'
+      
+      management_ip:
+        description: '管理地址 IP (仅多网口生效)'
+        required: false
+        default: '192.168.6.1'
+        type: string
+      
+      custom_packages:
+        description: '自定义软件包 (用空格分隔)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  TZ: Asia/Shanghai
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-23.05
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+      with:
+        path: custom-immortalwrt-builder
+    
+    - name: Clone ImmortalWrt Source
+      run: |
+        git clone --depth=1 $REPO_URL -b $REPO_BRANCH openwrt
+        cd openwrt
+        echo "src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05" >> feeds.conf.default
+        echo "src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05" >> feeds.conf.default
+        echo "src-git routing https://github.com/openwrt/routing.git;openwrt-23.05" >> feeds.conf.default
+        echo "src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05" >> feeds.conf.default
+    
+    - name: Copy Custom Files
+      run: |
+        cp -rf custom-immortalwrt-builder/scripts/* openwrt/
+        cp -rf custom-immortalwrt-builder/configs/* openwrt/
+        cp custom-immortalwrt-builder/diy-part1.sh openwrt/
+        cp custom-immortalwrt-builder/diy-part2.sh openwrt/
+    
+    - name: Run DIY Part1
+      run: |
+        cd openwrt
+        chmod +x diy-part1.sh
+        ./diy-part1.sh
+        chmod +x scripts/*
+    
+    - name: Update Feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+    
+    - name: Apply Configuration
+      run: |
+        cd openwrt
+        # 合并基础配置
+        cat configs/base.config > .config
+        
+        # 根据输入参数调整配置
+        FIRMWARE_SIZE=${{ github.event.inputs.firmware_size }}
+        INSTALL_DOCKER=${{ github.event.inputs.install_docker }}
+        INSTALL_STORE=${{ github.event.inputs.install_app_store }}
+        CUSTOM_PACKAGES="${{ github.event.inputs.custom_packages }}"
+        KERNEL_VERSION="${{ github.event.inputs.kernel_version }}"
+        
+        # 设置固件大小
+        case $FIRMWARE_SIZE in
+          "1") ROOTFS_SIZE=1024 ;;
+          "1.5") ROOTFS_SIZE=1536 ;;
+          "2") ROOTFS_SIZE=2048 ;;
+          "4") ROOTFS_SIZE=4096 ;;
+          *) ROOTFS_SIZE=1024 ;;
+        esac
+        
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=$ROOTFS_SIZE" >> .config
+        echo "CONFIG_TARGET_KERNEL_PARTSIZE=64" >> .config
+        
+        # 设置内核版本
+        if [ "$KERNEL_VERSION" != "6.6" ]; then
+          echo "CONFIG_KERNEL_TESTING_VERSION=$KERNEL_VERSION" >> .config
+        fi
+        
+        # 添加 Docker
+        if [ "$INSTALL_DOCKER" = "true" ]; then
+          cat configs/docker.config >> .config
+        fi
+        
+        # 添加自定义包
+        if [ -n "$CUSTOM_PACKAGES" ]; then
+          for pkg in $CUSTOM_PACKAGES; do
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+          done
+        fi
+        
+        # 运行自定义脚本
+        ./scripts/customize.sh \
+          --docker "$INSTALL_DOCKER" \
+          --store "$INSTALL_STORE" \
+          --ip "${{ github.event.inputs.management_ip }}" \
+          --luci-version "${{ github.event.inputs.luci_version }}"
+    
+    - name: Run DIY Part2
+      run: |
+        cd openwrt
+        chmod +x diy-part2.sh
+        ./diy-part2.sh
+    
+    - name: Download Package Dependencies
+      run: |
+        cd openwrt
+        make defconfig
+        make -j8 download
+    
+    - name: Build Firmware
+      run: |
+        cd openwrt
+        make -j$(nproc) V=s || make -j1 V=s
+    
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: immortalwrt-custom-firmware
+        path: openwrt/bin/targets/x86/64/*.img.gz
