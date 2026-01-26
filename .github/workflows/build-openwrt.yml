@@ -113,11 +113,17 @@ jobs:
     - name: ⏬ Download Packages
       working-directory: ${{ github.workspace }}/openwrt
       run: |
-        # 1. 直接应用你的最终配置
-        [ -f ${{ github.workspace }}/.config ] && cp ${{ github.workspace }}/.config .config
-        # 2. 直接开始下载（系统会自动解析.config中的依赖）
+        echo “=== 步骤1: 复制用户配置 ==="
+        cp ${{ github.workspace }}/.config .config 2>/dev/null || echo “警告：未找到用户config，将使用默认配置”
+        echo “=== 步骤2: 使用 olddefconfig 非交互式解析依赖 ==="
+        make olddefconfig
+        echo “=== 步骤3: 确认最终配置的目标平台 ==="
+        echo “当前配置的目标:”
+        grep ^CONFIG_TARGET_ .config || echo “(未找到目标配置)”
+        echo “=== 步骤4: 开始下载软件包 ==="
         make download -j$(nproc)
-        find dl -size -1024c -delete
+        echo “=== 步骤5: 清理无效的下载缓存 ==="
+        find dl -size -1024c -delete 2>/dev/null || true
 
     # 步骤8：开始编译固件
     - name: 🔥 Start Compilation
