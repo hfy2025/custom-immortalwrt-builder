@@ -54,6 +54,18 @@ jobs:
         # 应用自定义 feeds 配置（如果存在）
         [ -f /home/build/repository/feeds.conf.custom ] && cp /home/build/repository/feeds.conf.custom feeds.conf.default
 
+    - name: 🔍 DEBUG - Find The Bad Line
+      run: |
+        echo "=== 当前目录 ==="
+        pwd && ls -la
+        echo "=== 搜索可能导致错误的行 (在 .yml 和 .sh 文件中) ==="
+        # 在工作流文件中搜索旧路径
+        if [ -f .github/workflows/*.yml ]; then grep -n "/home/build/openwrt" .github/workflows/*.yml || echo "在.yml文件中未找到旧路径"; fi
+        # 在可能存在的脚本中搜索旧路径
+        if [ -f diy-part1.sh ]; then grep -n "/home/build/openwrt" diy-part1.sh || echo "在diy-part1.sh中未找到旧路径"; fi
+        if [ -f diy-part2.sh ]; then grep -n "/home/build/openwrt" diy-part2.sh || echo "在diy-part2.sh中未找到旧路径"; fi
+        echo "=== 调试结束 ==="
+        
     - name: 🔍 Debug - List Files
       run: |
         pwd
