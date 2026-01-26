@@ -48,7 +48,6 @@ jobs:
 
     # 步骤3：克隆 ImmortalWrt 源码
     - name: 📥 Clone Source Code
-      working-directory: ${{ github.workspace }}
       run: |
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd /home/build/openwrt
@@ -71,15 +70,17 @@ jobs:
         
     # 步骤4：执行第一阶段自定义脚本
     - name: 🔨 Run DIY Script Part 1
+      working-directory: ${{ github.workspace }}/openwrt
       run: |
-        cd /home/build/openwrt
-        if [ -f /home/build/repository/diy-part1.sh ]; then
-          chmod +x /home/build/repository/diy-part1.sh
-          /home/build/repository/diy-part1.sh
+        if [ -f ${{ github.workspace }}/repository/diy-part1.sh ]; then
+          cp ${{ github.workspace }}/repository/diy-part1.sh .
+          chmod +x diy-part1.sh
+          ./diy-part1.sh
         fi
 
     # 步骤5：更新并安装所有软件包源
     - name: 📦 Update and Install Feeds
+      working-directory: ${{ github.workspace }}/openwrt
       run: |
         ./scripts/feeds update -a
         ./scripts/feeds install -a
