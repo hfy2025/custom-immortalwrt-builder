@@ -4,8 +4,6 @@
 
 echo "开始执行第二阶段自定义配置..."
 
-cd /home/build/openwrt
-
 # 1. 手动添加 Argon 主题（确保使用最新版）
 echo "添加 Argon 主题..."
 if [ ! -d "package/luci-theme-argon" ]; then
